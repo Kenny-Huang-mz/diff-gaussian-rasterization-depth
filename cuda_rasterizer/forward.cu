@@ -23,8 +23,8 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 	// "Differentiable Point-Based Radiance Fields for 
 	// Efficient View Synthesis" by Zhang et al. (2022)
 	glm::vec3 pos = means[idx];
-	glm::vec3 dir = pos - campos;
-	dir = dir / glm::length(dir);
+	glm::vec3 dir = pos - campos; // 该点到相机的方向
+	dir = dir / glm::length(dir); // 归一化方向
 
 	glm::vec3* sh = ((glm::vec3*)shs) + idx * max_coeffs;
 	glm::vec3 result = SH_C0 * sh[0];
@@ -87,7 +87,7 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 	t.y = min(limy, max(-limy, tytz)) * t.z;
 
     //Camera coordinate system to ray coordinate system
-	glm::mat3 J = glm::mat3(
+	glm::mat3 J = glm::mat3( // 雅可比矩阵，描述三维点投影到2D时的局部线性变换
 		focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
 		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
 		0, 0, 0);   //The 3rd row after projection is not needed, it is simplified to 0 here
@@ -118,21 +118,21 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 // of quaternion normalization.
 __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 rot, float* cov3D)
 {
-	// Create scaling matrix
+	// Create scaling matrix 对角元素为：mod * scale.x，mod * scale.y，mod * scale.z
 	glm::mat3 S = glm::mat3(1.0f);
 	S[0][0] = mod * scale.x;
 	S[1][1] = mod * scale.y;
 	S[2][2] = mod * scale.z;
 
 	// Normalize quaternion to get valid rotation
-	glm::vec4 q = rot;
+	glm::vec4 q = rot; 
 	float r = q.x;
 	float x = q.y;
 	float y = q.z;
 	float z = q.w;
 
 	// Compute rotation matrix from quaternion
-	glm::mat3 R = glm::mat3(
+	glm::mat3 R = glm::mat3( // 根据四元数公式构造旋转矩阵 R, 描述高斯点的空间朝向
 		1.f - 2.f * (y * y + z * z), 2.f * (x * y - r * z), 2.f * (x * z + r * y),
 		2.f * (x * y + r * z), 1.f - 2.f * (x * x + z * z), 2.f * (y * z - r * x),
 		2.f * (x * z - r * y), 2.f * (y * z + r * x), 1.f - 2.f * (x * x + y * y)
@@ -161,7 +161,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const glm::vec4* rotations,
 	const float* opacities,
 	const float* shs,
-	bool* clamped,              //geomState.clamped,For backpropagation, the clamped partial derivative is 0
+	bool* clamped, //geomState.clamped,For backpropagation, the clamped partial derivative is 0
 	const float* cov3D_precomp,
 	const float* colors_precomp,
 	const float* viewmatrix,    //world_view_transform
@@ -415,7 +415,8 @@ void FORWARD::render(
 		bg_color,
 		out_color,
         depth_map,
-        weight_map );
+        weight_map,
+        feature_map);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
