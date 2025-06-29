@@ -13,7 +13,7 @@
 #include "rasterize_points.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("rasterize_gaussians", &RasterizeGaussiansCUDA);
+  m.def("rasterize_gaussians", &RasterizeGaussiansCUDA); // 在Python模块m中, 定义名为rasterize_gaussians的函数, 当Python调用这个函数时, 请实际上去执行C++中的RasterizeGaussiansCUDA函数
   m.def("rasterize_gaussians_backward", &RasterizeGaussiansBackwardCUDA);
   m.def("mark_visible", &markVisible);
 }

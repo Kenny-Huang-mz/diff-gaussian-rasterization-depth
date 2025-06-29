@@ -112,8 +112,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         args = (raster_settings.bg,
                 means3D, 
                 radii,
-                weight_map,
-                depth_map,
+                weight_map, # 在原3dgs基础上额外添加
+                depth_map, # 在原3dgs基础上额外添加
                 colors_precomp, 
                 scales, 
                 rotations, 
@@ -124,7 +124,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.tanfovx, 
                 raster_settings.tanfovy, 
                 grad_out_color, 
-                grad_out_depth, 
+                grad_out_depth,  # 在原3dgs基础上额外添加
                 sh, 
                 raster_settings.sh_degree, 
                 raster_settings.campos,

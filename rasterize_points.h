@@ -17,7 +17,7 @@
 
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,torch::Tensor,torch::Tensor>
-RasterizeGaussiansCUDA(
+RasterizeGaussiansCUDA( // diff_gaussian_rasterization_depth/__init__.py 92行调用的函数
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
     const torch::Tensor& colors,

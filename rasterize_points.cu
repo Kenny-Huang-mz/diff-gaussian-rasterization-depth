@@ -32,8 +32,9 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
+// num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map = _C.rasterize_gaussians(*args)
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,torch::Tensor,torch::Tensor>
-RasterizeGaussiansCUDA(
+RasterizeGaussiansCUDA( // diff_gaussian_rasterization_depth/__init__.py 92行调用的函数
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,       //parameters
     const torch::Tensor& colors,        //parameters
