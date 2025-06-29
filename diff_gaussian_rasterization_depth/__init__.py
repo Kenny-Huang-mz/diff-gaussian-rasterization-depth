@@ -18,15 +18,15 @@ def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
     return tuple(copied_tensors)
 
-def rasterize_gaussians(
-    means3D,
-    means2D,
+def rasterize_gaussians( # 一个python的接口，最终调用的还是_RasterizeGaussians.apply，一个PyTorch的自定义求导函数
+    means3D, # 每个高斯椭球在 3D 世界坐标系中的中心点位置
+    means2D, # 3D 中心点投影到 2D 图像平面上的坐标
     sh,
-    colors_precomp,
+    colors_precomp, # 预计算的颜色，通常是球谐函数的零阶（DC）分量，代表基础颜色
     opacities,
     scales,
-    rotations,
-    cov3Ds_precomp,
+    rotations, # 每个高斯椭球的旋转姿态，通常用四元数表示
+    cov3Ds_precomp, # 预计算的 3D 协方差矩阵，它结合了缩放和旋转，精确定义了高斯椭球在 3D 空间中的形状和方向
     raster_settings,
 ):
     return _RasterizeGaussians.apply(
@@ -41,22 +41,19 @@ def rasterize_gaussians(
         raster_settings,
     )
 
-"""
-自定义求导
-"""
 class _RasterizeGaussians(torch.autograd.Function):
     @staticmethod
-    def forward(
+    def forward( # 前向传播函数，计算渲染结果，将3D高斯绘制或渲染成2D图像，并保存必要的中间变量以供后向传播使用
         ctx,
         means3D,
         means2D,
-        sh,
-        colors_precomp,
+        sh, # 球谐系数
+        colors_precomp, # 预计算的颜色，即基于当前相机视角，利用sh系数计算出的颜色
         opacities,
         scales,
         rotations,
         cov3Ds_precomp,
-        raster_settings,
+        raster_settings, # 光栅化设置，包含与渲染过程相关的相机参数和控制参数，如相机位置、朝向、输出图像尺寸、视场切线值
     ):
 
         # Restructure arguments the way that the C++ lib expects them
@@ -69,15 +66,15 @@ class _RasterizeGaussians(torch.autograd.Function):
             rotations,
             raster_settings.scale_modifier,
             cov3Ds_precomp,
-            raster_settings.viewmatrix,
-            raster_settings.projmatrix,
+            raster_settings.viewmatrix, # 相机视图矩阵，描述相机的朝向和位置
+            raster_settings.projmatrix, # 相机投影矩阵，描述相机的投影方式
             raster_settings.tanfovx,
             raster_settings.tanfovy,
             raster_settings.image_height,
             raster_settings.image_width,
             sh,
             raster_settings.sh_degree,
-            raster_settings.campos, #相机中心
+            raster_settings.campos, #相机中心的位置，虽然在viewmatrix中也有，但这里是为了方便使用
             raster_settings.prefiltered,
             raster_settings.debug
         )
@@ -86,25 +83,25 @@ class _RasterizeGaussians(torch.autograd.Function):
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer,depth_map,weight_map = _C.rasterize_gaussians(*args)
+                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
                 print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer,depth_map,weight_map = _C.rasterize_gaussians(*args)
+            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map = _C.rasterize_gaussians(*args)
             #return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         # ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer)
-        ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer,
-                              binningBuffer, imgBuffer,depth_map, weight_map)
+        ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer,
+                              depth_map, weight_map)
         return color, radii, depth_map, weight_map
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_radii, grad_out_depth, grad_weight):   #grad_out_color，LOSS对forward输出的导数。
+    def backward(ctx, grad_out_color, grad_radii, grad_out_depth, grad_weight): #grad_out_color，LOSS对forward输出的导数。
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
@@ -196,10 +193,10 @@ class GaussianRasterizer(nn.Module):
     def forward(self, means3D, means2D, opacities, shs = None, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None):
         
         raster_settings = self.raster_settings
-
+        # 对于颜色，要么提供球谐函数系数 shs（让程序自己算颜色），要么提供预计算好的颜色 colors_precomp，但不能两个都给，也不能都不给。
         if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
             raise Exception('Please provide excatly one of either SHs or precomputed colors!')
-        
+        # 对于几何形状，要么提供缩放 scales 和旋转 rotations（让程序自己算协方差），要么提供预计算好的 3D 协方差 cov3D_precomp，同样，不能两个都给或都不给。
         if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
             raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
         
@@ -227,4 +224,3 @@ class GaussianRasterizer(nn.Module):
             cov3D_precomp,
             raster_settings, 
         )
-

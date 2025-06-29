@@ -192,9 +192,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Perform near culling, quit if outside.
 	float3 p_view;  //camera coordinate system
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
-		return;
+		return; // 不在视锥体内，提前返回
 
-	// Transform point by projecting
+	// Transform point by projecting 将三维点坐标投影到齐次裁剪空间（NDC），并进行归一化，得到屏幕空间下的投影坐标
 	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
 	float4 p_hom = transformPoint4x4(p_orig, projmatrix);   //NDC
 	float p_w = 1.0f / (p_hom.w + 0.0000001f);
@@ -203,7 +203,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
 	const float* cov3D;
-	if (cov3D_precomp != nullptr)
+	if (cov3D_precomp != nullptr) // 判断是否有预先计算好的三维协方差矩阵（cov3D_precomp）
 	{
 		cov3D = cov3D_precomp + idx * 6;
 	}
@@ -223,10 +223,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float det_inv = 1.f / det;
 	float3 conic = { cov.z * det_inv, -cov.y * det_inv, cov.x * det_inv };
 
-	// Compute extent in screen space (by finding eigenvalues of
-	// 2D covariance matrix). Use extent to compute a bounding rectangle
-	// of screen-space tiles that this Gaussian overlaps with. Quit if
-	// rectangle covers 0 tiles. 
+	// Compute extent in screen space (by finding eigenvalues of 2D covariance matrix).
+	// Use extent to compute a bounding rectangle of screen-space tiles that this Gaussian overlaps with.
+	// Quit if rectangle covers 0 tiles. 
 	float mid = 0.5f * (cov.x + cov.z);
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
