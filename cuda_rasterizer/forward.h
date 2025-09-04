@@ -31,6 +31,7 @@ namespace FORWARD
 		bool* clamped,
 		const float* cov3D_precomp,
 		const float* colors_precomp,
+		const float* features_precomp,
 		const float* viewmatrix,
 		const float* projmatrix,
 		const glm::vec3* cam_pos,
@@ -42,6 +43,7 @@ namespace FORWARD
 		float* depths,
 		float* cov3Ds,
 		float* colors,
+		float* features,
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
@@ -54,6 +56,7 @@ namespace FORWARD
 		const uint32_t* point_list,
 		int W, int H,
 		const float2* points_xy_image,
+		const float* colors,
 		const float* features,
 		const float4* conic_opacity,
         const float* depths,
@@ -62,7 +65,8 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
         float* depth_map,
-        float* weight_map );
+        float* weight_map,
+		float* feature_map);
 }
 
 

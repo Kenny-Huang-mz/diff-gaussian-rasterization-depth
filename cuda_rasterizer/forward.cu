@@ -164,6 +164,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	bool* clamped, //geomState.clamped,For backpropagation, the clamped partial derivative is 0
 	const float* cov3D_precomp,
 	const float* colors_precomp,
+	const float* features_precomp,
 	const float* viewmatrix,    //world_view_transform
 	const float* projmatrix,    //full_proj_transform
 	const glm::vec3* cam_pos,
@@ -175,6 +176,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float* depths,
 	float* cov3Ds,
 	float* rgb,
+	float* features,
 	float4* conic_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
@@ -246,6 +248,15 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 2] = result.z;
 	}
 
+	if (features_precomp != nullptr)
+	{
+		for (int i = 0; i < C; i++)
+		{
+			features[idx * C + i] = features_precomp[idx * C + i];
+		}
+	}
+
+
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
 	radii[idx] = my_radius;
@@ -265,7 +276,8 @@ renderCUDA(
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
-	const float* __restrict__ features, //颜色
+	const float* __restrict__ colors,
+	const float* __restrict__ features,
 	const float4* __restrict__ conic_opacity,
     const float* __restrict__ depths,
 	float* __restrict__ final_T,
@@ -273,7 +285,8 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
     float* __restrict__ depth_map,
-    float* __restrict__ weight_map )
+    float* __restrict__ weight_map,
+	float* __restrict__ feature_map)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -305,8 +318,9 @@ renderCUDA(
 	uint32_t contributor = 0;   // number of GS participating in rendering
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
-    float Dep = 0;
-    float Wei = 0;
+	float Dep = 0;
+	float Wei = 0;
+	float Fea[CHANNELS] = { 0 };
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -358,7 +372,10 @@ renderCUDA(
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			{
+				C[ch] += colors[collected_id[j] * CHANNELS + ch] * alpha * T;
+				Fea[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+			}
             Dep += depths[collected_id[j]] * alpha * T;
             Wei += alpha * T;
 			T = test_T;
@@ -380,6 +397,8 @@ renderCUDA(
 		Wei += 1e-6;
         depth_map[pix_id]= Dep/Wei;
         weight_map[pix_id] = Wei;
+		for (int ch = 0; ch < CHANNELS; ch++)
+			feature_map[ch * H * W + pix_id] = Fea[ch] / Wei;
 	}
 }
 
@@ -390,6 +409,7 @@ void FORWARD::render(
 	int W, int H,
 	const float2* means2D,
 	const float* colors,
+	const float* features,
 	const float4* conic_opacity,
     const float* depths,
 	float* final_T, //imgState.accum_alpha,
@@ -397,8 +417,8 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
     float* depth_map,
-    float* weight_map
-)
+    float* weight_map,
+	float* feature_map)
 {
         //grid = (tile_x,tile_y),block = (block_x,block_y,1)
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
@@ -407,6 +427,7 @@ void FORWARD::render(
 		W, H,
 		means2D,
 		colors,
+		features,
 		conic_opacity,
         depths,
 		final_T,
@@ -428,6 +449,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	bool* clamped,                  //geomState.clamped
 	const float* cov3D_precomp,
 	const float* colors_precomp,
+	const float* features_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const glm::vec3* cam_pos,
@@ -439,6 +461,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	float* depths,                  //geomState.depths
 	float* cov3Ds,                  //geomState.cov3D
 	float* rgb,                     //geomState.rgb
+	float* features,
 	float4* conic_opacity,          //geomState.conic_opacity
 	const dim3 grid,                //tile_grid
 	uint32_t* tiles_touched,        //geomState.tiles_touched
@@ -455,6 +478,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		clamped,
 		cov3D_precomp,
 		colors_precomp,
+		features_precomp,
 		viewmatrix, 
 		projmatrix,
 		cam_pos,
@@ -466,6 +490,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		depths,
 		cov3Ds,
 		rgb,
+		features,
 		conic_opacity,
 		grid,
 		tiles_touched,

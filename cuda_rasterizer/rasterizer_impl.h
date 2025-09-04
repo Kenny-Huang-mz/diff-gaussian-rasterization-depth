@@ -37,6 +37,7 @@ namespace CudaRasterizer
 		float* cov3D;
 		float4* conic_opacity;
 		float* rgb;
+        float* features; // 新增
 		uint32_t* point_offsets;    //start index corresponding to point
 		uint32_t* tiles_touched;
 

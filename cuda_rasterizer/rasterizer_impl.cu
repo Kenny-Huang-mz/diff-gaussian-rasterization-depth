@@ -163,6 +163,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
+	obtain(chunk, geom.features, P * 3, 128); // 新增
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
@@ -208,6 +209,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* means3D,
 	const float* shs,
 	const float* colors_precomp,
+	const float* features_precomp, // 新增
 	const float* opacities,
 	const float* scales,
 	const float scale_modifier,
@@ -221,6 +223,7 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
     float* depth_map,
     float* weight_map,
+	float* feature_map, // 新增
 	int* radii,         //output. for densification
     bool debug)
 {
@@ -261,6 +264,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.clamped,  //Mark Gaussian with color less than 0
 		cov3D_precomp,
 		colors_precomp,
+		features_precomp, // 新增
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
 		width, height,
@@ -271,6 +275,7 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		geomState.cov3D,
 		geomState.rgb,
+		geomState.features, // 新增
 		geomState.conic_opacity,    //2d-cov(inverse)+opa
 		tile_grid,
 		geomState.tiles_touched,
@@ -323,7 +328,8 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(, debug)
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	const float* color_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	const float* feature_ptr = features_precomp != nullptr ? features_precomp : geomState.features; // 新增
 	CHECK_CUDA(FORWARD::render(
 		tile_grid,
         block,
@@ -331,6 +337,7 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list,    //Sorted GS ID
 		width, height,
 		geomState.means2D,
+		color_ptr, // 新增
 		feature_ptr,
 		geomState.conic_opacity,
         geomState.depths,
@@ -339,7 +346,8 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
         depth_map,
-        weight_map),
+        weight_map,
+		feature_map), // 新增
                debug)
 
 	return num_rendered;
@@ -354,6 +362,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* means3D,
 	const float* shs,
 	const float* colors_precomp,
+	const float* features_precomp, // 新增
 	const float* scales,
 	const float scale_modifier,
 	const float* rotations,
@@ -370,11 +379,13 @@ void CudaRasterizer::Rasterizer::backward(
 	char* img_buffer,
 	const float* dL_dpix,   //dL_dout_color [in], Calculated by pytorch
     const float* dL_dDs,    //dL_dout_depth [in], Calculated by pytorch
+	const float* dL_dFs,
 	float* dL_dmean2D,
 	float* dL_dconic,
 	float* dL_dopacity,
 	float* dL_dcolor,
     float* dL_ddepths,
+	float* dL_dfeatures,
 	float* dL_dmean3D,
 	float* dL_dcov3D,
 	float* dL_dsh,
@@ -401,7 +412,8 @@ void CudaRasterizer::Rasterizer::backward(
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
 	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
-    const float* depths = (colors_precomp != nullptr) ? colors_precomp : geomState.depths;
+	const float* feature_ptr = (features_precomp != nullptr) ? features_precomp : geomState.features;
+    const float* depths = geomState.depths;
 
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
@@ -413,6 +425,7 @@ void CudaRasterizer::Rasterizer::backward(
 		geomState.means2D,
 		geomState.conic_opacity,
 		color_ptr,      //color of each GS
+		feature_ptr, // 新增
         depths,         //depth of each GS
 		imgState.accum_alpha,
         accum_weight,   //weight map
@@ -420,11 +433,13 @@ void CudaRasterizer::Rasterizer::backward(
 		imgState.n_contrib,
 		dL_dpix,
         dL_dDs,
+		dL_dFs, // 新增
 		(float3*)dL_dmean2D,
 		(float4*)dL_dconic,
 		dL_dopacity,
 		dL_dcolor,      //partial derivatives of each GS color
-        dL_ddepths      //partial derivatives of each GS depth
+        dL_ddepths,      //partial derivatives of each GS depth
+		dL_dfeatures // 新增
         ), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
@@ -453,5 +468,7 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dcov3D,              //output
 		dL_dsh,                 //output
 		(glm::vec3*)dL_dscale,  //output
-		(glm::vec4*)dL_drot), debug)    //output
+		(glm::vec4*)dL_drot,    //output
+		dL_dfeatures), // 新增
+		debug)
 }

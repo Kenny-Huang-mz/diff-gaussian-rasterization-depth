@@ -38,6 +38,7 @@ namespace CudaRasterizer
 			const float* means3D,
 			const float* shs,
 			const float* colors_precomp,
+			const float* features_precomp,
 			const float* opacities,
 			const float* scales,
 			const float scale_modifier,
@@ -51,6 +52,7 @@ namespace CudaRasterizer
 			float* out_color,
             float* depth_map ,//深度图
             float* weight_map,
+			float* feature_map,
 			int* radii = nullptr,
 			bool debug = false);
 
@@ -61,6 +63,7 @@ namespace CudaRasterizer
 			const float* means3D,
 			const float* shs,
 			const float* colors_precomp,
+			const float* features_precomp,
 			const float* scales,
 			const float scale_modifier,
 			const float* rotations,
@@ -77,11 +80,13 @@ namespace CudaRasterizer
 			char* image_buffer,
 			const float* dL_dpix,
             const float* dL_dDs,
+			const float* dL_dFs,
 			float* dL_dmean2D,
 			float* dL_dconic,
 			float* dL_dopacity,
 			float* dL_dcolor,
             float* dL_ddepths,       //[out]
+			float* dL_dfeatures,
 			float* dL_dmean3D,
 			float* dL_dcov3D,
 			float* dL_dsh,
