@@ -353,7 +353,7 @@ __device__ void computeCov3D(int idx, const glm::vec3 scale, float mod, const gl
 // Backward pass of the preprocessing steps, except
 // for the covariance computation and inversion
 // (those are handled by a previous kernel call)
-template<int C>
+template<int C_COLOR, int C_FEAT>
 __global__ void preprocessCUDA(
 	int P, int D, int M,
 	const float3* means,
@@ -407,7 +407,7 @@ __global__ void preprocessCUDA(
 }
 
 // Backward version of the rendering procedure.
-template <uint32_t C>
+template <uint32_t C_COLOR, uint32_t C_FEAT>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
@@ -456,8 +456,8 @@ renderCUDA(
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
-	__shared__ float collected_colors[C * BLOCK_SIZE];
-	__shared__ float collected_features[C * BLOCK_SIZE];
+	__shared__ float collected_colors[C_COLOR * BLOCK_SIZE];
+	__shared__ float collected_features[C_FEAT * BLOCK_SIZE];
     __shared__ float collected_depths[BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
@@ -476,11 +476,11 @@ renderCUDA(
 	uint32_t contributor = toDo;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 
-	float accum_rec_C[C] = { 0 };
-	float accum_rec_F[C] = { 0 };
-	float dL_dpixel[C];
-    float dL_dD;
-	float dL_dF[C];
+	float accum_rec_C[C_COLOR] = { 0 };
+	float accum_rec_F[C_FEAT] = { 0 };
+	float dL_dpixel[C_COLOR];
+	   float dL_dD;
+	float dL_dF[C_FEAT];
     float accum_wei = 0;  //i+1 to N
     float accum_dep = 0;  //i+1 to N
     if (inside){
@@ -493,8 +493,8 @@ renderCUDA(
     }
 
 	float last_alpha = 0;   //the current GS is i, last indicates i+1
-	float last_color[C] = { 0 };
-	float last_feature[C] = { 0 };
+	float last_color[C_COLOR] = { 0 };
+	float last_feature[C_FEAT] = { 0 };
     float last_depth = 0;
 
 	// Gradient of pixel coordinate w.r.t. normalized 
@@ -516,11 +516,14 @@ renderCUDA(
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
             collected_depths[block.thread_rank()] = depths[coll_id];
-            for (int ch = 0; ch < C; ch++)
-			{
-				collected_colors[ch * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + ch];
-				collected_features[ch * BLOCK_SIZE + block.thread_rank()] = features[coll_id * C + ch];
-			}
+            for (int ch = 0; ch < C_COLOR; ch++)
+   {
+    collected_colors[ch * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C_COLOR + ch];
+   }
+   for (int ch = 0; ch < C_FEAT; ch++)
+   {
+    collected_features[ch * BLOCK_SIZE + block.thread_rank()] = features[coll_id * C_FEAT + ch];
+   }
 		}
 		block.sync();
 
@@ -559,24 +562,32 @@ renderCUDA(
             //Partial derivative of depth loss with respect to each Gaussian depth
             atomicAdd(&(dL_ddepths[global_id]), dD_ddepth * dL_dD);
 
-			for (int ch = 0; ch < C; ch++)
+			for (int ch = 0; ch < C_COLOR; ch++)
 			{
 				const float c = collected_colors[ch * BLOCK_SIZE + j];
-				const float f = collected_features[ch * BLOCK_SIZE + j];
 				// Update last color (to be used in the next iteration)
 				accum_rec_C[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec_C[ch];
-				accum_rec_F[ch] = last_alpha * last_feature[ch] + (1.f - last_alpha) * accum_rec_F[ch];
 				last_color[ch] = c;
-				last_feature[ch] = f;
 
 				const float dL_dchannel = dL_dpixel[ch];
 				dL_dalpha += (c - accum_rec_C[ch]) * dL_dchannel;
-				dL_dalpha += (f - accum_rec_F[ch]) * dL_dF[ch];
-				// Update the gradients w.r.t. color of the Gaussian. 
+				// Update the gradients w.r.t. color of the Gaussian.
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
-				atomicAdd(&(dL_dfeatures[global_id * C + ch]), dchannel_dcolor * dL_dF[ch]);
+				atomicAdd(&(dL_dcolors[global_id * C_COLOR + ch]), dchannel_dcolor * dL_dchannel);
+			}
+			for (int ch = 0; ch < C_FEAT; ch++)
+			{
+				const float f = collected_features[ch * BLOCK_SIZE + j];
+				// Update last feature (to be used in the next iteration)
+				accum_rec_F[ch] = last_alpha * last_feature[ch] + (1.f - last_alpha) * accum_rec_F[ch];
+				last_feature[ch] = f;
+
+				dL_dalpha += (f - accum_rec_F[ch]) * dL_dF[ch];
+				// Update the gradients w.r.t. feature of the Gaussian.
+				// Atomic, since this pixel is just one of potentially
+				// many that were affected by this Gaussian.
+				atomicAdd(&(dL_dfeatures[global_id * C_FEAT + ch]), dchannel_dcolor * dL_dF[ch]);
 			}
 
             {   //+dW_dalpha
@@ -602,7 +613,7 @@ renderCUDA(
 			// the [background] color is added if nothing left to blend
             // "out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch]"
 			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++)
+			for (int i = 0; i < C_COLOR; i++)
 				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
 			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
 
@@ -676,7 +687,7 @@ void BACKWARD::preprocess(
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
 	// matrix gradients to scale and rotation.
-	preprocessCUDA<NUM_CHANNELS> << < (P + 255) / 256, 256 >> > (
+	preprocessCUDA<3, 32> << < (P + 255) / 256, 256 >> > (
 		P, D, M,
 		(float3*)means3D,
 		radii,
@@ -725,7 +736,7 @@ void BACKWARD::render(
 	float* dL_dfeatures
     )
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
+	renderCUDA<3, 32> << <grid, block >> >(
 		ranges,
 		point_list,
 		W, H,

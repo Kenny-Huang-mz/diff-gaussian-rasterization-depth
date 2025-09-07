@@ -153,7 +153,7 @@ __device__ void computeCov3D(const glm::vec3 scale, float mod, const glm::vec4 r
 }
 
 // Perform initial steps for each Gaussian prior to rasterization.
-template<int C>
+template<int C_COLOR, int C_FEAT>
 __global__ void preprocessCUDA(int P, int D, int M,
 	const float* orig_points,
 	const glm::vec3* scales,
@@ -243,16 +243,16 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if (colors_precomp == nullptr)
 	{
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
-		rgb[idx * C + 0] = result.x;
-		rgb[idx * C + 1] = result.y;
-		rgb[idx * C + 2] = result.z;
+		rgb[idx * C_COLOR + 0] = result.x;
+		rgb[idx * C_COLOR + 1] = result.y;
+		rgb[idx * C_COLOR + 2] = result.z;
 	}
 
 	if (features_precomp != nullptr)
 	{
-		for (int i = 0; i < C; i++)
+		for (int i = 0; i < C_FEAT; i++)
 		{
-			features[idx * C + i] = features_precomp[idx * C + i];
+			features[idx * C_FEAT + i] = features_precomp[idx * C_FEAT + i];
 		}
 	}
 
@@ -269,7 +269,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
-template <uint32_t CHANNELS>
+template <uint32_t C_COLOR, uint32_t C_FEAT>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA(
 	const uint2* __restrict__ ranges,
@@ -317,10 +317,10 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;   // number of GS participating in rendering
 	uint32_t last_contributor = 0;
-	float C[CHANNELS] = { 0 };
+	float C[C_COLOR] = { 0 };
 	float Dep = 0;
 	float Wei = 0;
-	float Fea[CHANNELS] = { 0 };
+	float Fea[C_FEAT] = { 0 };
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -371,10 +371,13 @@ renderCUDA(
 			}
 
 			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
+			for (int ch = 0; ch < C_COLOR; ch++)
 			{
-				C[ch] += colors[collected_id[j] * CHANNELS + ch] * alpha * T;
-				Fea[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+				C[ch] += colors[collected_id[j] * C_COLOR + ch] * alpha * T;
+			}
+			for (int ch = 0; ch < C_FEAT; ch++)
+			{
+				Fea[ch] += features[collected_id[j] * C_FEAT + ch] * alpha * T;
 			}
             Dep += depths[collected_id[j]] * alpha * T;
             Wei += alpha * T;
@@ -392,12 +395,12 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
+		for (int ch = 0; ch < C_COLOR; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 		Wei += 1e-6;
-        depth_map[pix_id]= Dep/Wei;
-        weight_map[pix_id] = Wei;
-		for (int ch = 0; ch < CHANNELS; ch++)
+		      depth_map[pix_id]= Dep/Wei;
+		      weight_map[pix_id] = Wei;
+		for (int ch = 0; ch < C_FEAT; ch++)
 			feature_map[ch * H * W + pix_id] = Fea[ch] / Wei;
 	}
 }
@@ -421,7 +424,7 @@ void FORWARD::render(
 	float* feature_map)
 {
         //grid = (tile_x,tile_y),block = (block_x,block_y,1)
-	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
+	renderCUDA<3, 32> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,
@@ -429,14 +432,14 @@ void FORWARD::render(
 		colors,
 		features,
 		conic_opacity,
-        depths,
+	       depths,
 		final_T,
 		n_contrib,
 		bg_color,
 		out_color,
-        depth_map,
-        weight_map,
-        feature_map);
+	       depth_map,
+	       weight_map,
+	       feature_map);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -467,7 +470,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	uint32_t* tiles_touched,        //geomState.tiles_touched
 	bool prefiltered)
 {
-	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
+	preprocessCUDA<3, 32> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
 		means3D,
 		scales,
@@ -479,7 +482,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		cov3D_precomp,
 		colors_precomp,
 		features_precomp,
-		viewmatrix, 
+		viewmatrix,
 		projmatrix,
 		cam_pos,
 		W, H,
